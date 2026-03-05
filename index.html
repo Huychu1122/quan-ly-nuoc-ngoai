@@ -181,6 +181,12 @@ tr.row-orange td:first-child{border-left:3px solid #e67e22;}
 .overtime-opt .opt-title{font-size:14px;font-weight:700;color:var(--navy);}
 .overtime-opt .opt-desc{font-size:12px;color:var(--gray-600);margin-top:3px;}
 /* TOAST */
+.loading-overlay{position:fixed;inset:0;background:rgba(26,39,68,.55);z-index:99990;display:none;align-items:center;justify-content:center;backdrop-filter:blur(2px);}
+.loading-overlay.show{display:flex;}
+.loading-box{background:white;border-radius:16px;padding:28px 36px;display:flex;flex-direction:column;align-items:center;gap:14px;box-shadow:0 20px 60px rgba(0,0,0,.25);}
+.loading-spinner{width:44px;height:44px;border:4px solid #e8f4fd;border-top-color:var(--cyan);border-radius:50%;animation:spin .8s linear infinite;}
+.loading-msg{font-size:14px;font-weight:600;color:var(--navy);}
+@keyframes spin{to{transform:rotate(360deg);}}
 .toast-container{position:fixed;top:18px;right:18px;z-index:9999;display:flex;flex-direction:column;gap:7px;}
 .toast{background:var(--navy);color:white;padding:11px 16px;border-radius:10px;font-size:13.5px;font-weight:500;display:flex;align-items:center;gap:9px;box-shadow:var(--shadow);animation:slideIn .3s ease;max-width:340px;border-left:4px solid var(--cyan);}
 .toast.error{border-left-color:var(--red);}
@@ -420,6 +426,14 @@ tr.row-orange td:first-child{border-left:3px solid #e67e22;}
 </style>
 </head>
 <body>
+
+<!-- LOADING OVERLAY -->
+<div class="loading-overlay" id="globalLoading">
+  <div class="loading-box">
+    <div class="loading-spinner"></div>
+    <div class="loading-msg" id="loadingMsg">Đang xử lý...</div>
+  </div>
+</div>
 
 <div id="loginScreen">
   <div class="auth-card">
@@ -879,6 +893,24 @@ tr.row-orange td:first-child{border-left:3px solid #e67e22;}
 const ADMIN_USER='admin',ADMIN_PASS='admin123',IMPORT_PASS='admin123';
 let currentUser=null,_overtimeId=null,_overtimeOpt=null,_confirmCb=null;
 
+// ── SESSION PERSISTENCE (24h) ──
+const SESSION_KEY='ca_session';
+const SESSION_TTL=24*60*60*1000; // 24 giờ
+
+function saveSession(user){
+  localStorage.setItem(SESSION_KEY,JSON.stringify({user,savedAt:Date.now()}));
+}
+function loadSession(){
+  try{
+    const raw=localStorage.getItem(SESSION_KEY);
+    if(!raw)return null;
+    const {user,savedAt}=JSON.parse(raw);
+    if(Date.now()-savedAt>SESSION_TTL){localStorage.removeItem(SESSION_KEY);return null;}
+    return user;
+  }catch{return null;}
+}
+function clearSession(){localStorage.removeItem(SESSION_KEY);}
+
 // ═══════════════════════════════════════════════════════
 // SUPABASE DATA LAYER
 // ═══════════════════════════════════════════════════════
@@ -899,12 +931,17 @@ async function tryAutoConnect(){
     if(error){
       const msg=error.message||error.details||error.hint||JSON.stringify(error);
       console.error('Supabase connect error details:',JSON.stringify(error));
-      // If table doesn't exist yet — show SQL setup prompt
+      // DataCloneError = running inside iframe/sandbox (e.g. claude.ai preview)
+      if(msg.includes('DataCloneError')||msg.includes('postMessage')||msg.includes('srcdoc')){
+        showSandboxError();
+        return false;
+      }
+      // Table doesn't exist yet
       if(error.code==='42P01'||msg.includes('relation')||msg.includes('does not exist')){
         showSqlSetupPrompt();
         return false;
       }
-      // Otherwise just warn but continue — might be empty table (PGRST116 = no rows is OK)
+      // Empty table is OK
       if(error.code==='PGRST116'||msg.includes('0 rows')){
         await loadAllData();
         return true;
@@ -919,6 +956,32 @@ async function tryAutoConnect(){
     showConnectError(e.message||String(e));
     return false;
   }
+}
+
+function showSandboxError(){
+  const loadingDiv=document.getElementById('db-loading');
+  if(loadingDiv)loadingDiv.remove();
+  const d=document.createElement('div');
+  d.style='position:fixed;inset:0;background:linear-gradient(135deg,#1a2744,#2e4080);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px;font-family:Be Vietnam Pro,sans-serif';
+  d.innerHTML='<div style="background:white;border-radius:16px;padding:32px 28px;max-width:480px;width:100%;text-align:center">'
+    +'<div style="font-size:52px;margin-bottom:16px">🌐</div>'
+    +'<h3 style="color:#1a2744;font-size:18px;margin-bottom:10px">Mở file trực tiếp trên trình duyệt</h3>'
+    +'<p style="font-size:13px;color:#555;line-height:1.7;margin-bottom:20px">'
+    +'File này đang chạy trong môi trường preview bị giới hạn.<br>'
+    +'Để dùng được đầy đủ, hãy mở file theo một trong hai cách sau:</p>'
+    +'<div style="background:#f0f4ff;border-radius:10px;padding:16px;text-align:left;font-size:13px;line-height:2;margin-bottom:16px">'
+    +'<b>Cách 1 — Nhanh nhất:</b><br>'
+    +'① Tải file <b>index.html</b> về máy<br>'
+    +'② Mở bằng <b>Chrome</b> hoặc <b>Edge</b> (double-click)<br><br>'
+    +'<b>Cách 2 — Dùng cho nhiều người:</b><br>'
+    +'① Vào <a href="https://github.com" target="_blank" style="color:#2b6cb0;font-weight:700">github.com</a> → Tạo repo mới (Public)<br>'
+    +'② Upload file → đổi tên thành <b>index.html</b><br>'
+    +'③ Settings → Pages → Deploy from main<br>'
+    +'④ Chia sẻ link <b>https://[tên].github.io/[repo]</b>'
+    +'</div>'
+    +'<p style="font-size:12px;color:#888">Sau khi mở đúng cách, file sẽ tự động kết nối dữ liệu.</p>'
+    +'</div>';
+  document.body.appendChild(d);
 }
 
 function showConnectError(msg){
@@ -1029,20 +1092,21 @@ async function doLogin(){
   if(!user||!pass){toast('Vui lòng nhập đầy đủ thông tin','error');return;}
   const loginBtn=document.querySelector('#loginScreen .btn-primary');
   if(loginBtn){loginBtn.disabled=true;loginBtn.textContent='⏳ Đang đăng nhập...';}
+  showLoading('Đang đăng nhập...');
   try{
-    // Reload fresh data before login
     if(_sb)await loadAllData();
     if(user===ADMIN_USER&&pass===ADMIN_PASS){
       currentUser={phone:'admin',name:'Quản trị viên',role:'admin',address:'CA Phường Tây Hồ'};
-      startApp();
+      saveSession(currentUser);startApp();
     } else {
       const u=getUsers().find(u=>u.phone===user&&u.pass===pass);
       if(u){
         if(u.blocked){toast('🚫 Tài khoản của bạn đã bị chặn. Vui lòng liên hệ Công An Phường Tây Hồ.','error');return;}
-        currentUser={...u,role:'user'};startApp();
+        currentUser={...u,role:'user'};saveSession(currentUser);startApp();
       } else toast('Sai thông tin đăng nhập','error');
     }
   } finally {
+    hideLoading();
     if(loginBtn){loginBtn.disabled=false;loginBtn.textContent='🔐 ĐĂNG NHẬP';}
   }
 }
@@ -1058,7 +1122,7 @@ async function doRegister(){
   await saveUser(newUser);
   toast('Đăng ký thành công! Vui lòng đăng nhập','success');showScreen('loginScreen');
 }
-function doLogout(){currentUser=null;document.getElementById('app').style.display='none';showScreen('loginScreen');document.getElementById('loginUser').value='';document.getElementById('loginPass').value='';}
+function doLogout(){currentUser=null;clearSession();document.getElementById('app').style.display='none';showScreen('loginScreen');document.getElementById('loginUser').value='';document.getElementById('loginPass').value='';}
 function startApp(){
   ['loginScreen','registerScreen'].forEach(s=>document.getElementById(s).style.display='none');
   document.getElementById('app').style.display='flex';
@@ -1567,41 +1631,61 @@ async function submitDeclare(){
   if(!gender){setErr('d-gender','err-gender','Vui lòng chọn giới tính');err=true;}
   if(!arrivalDate||!days||!address){toast('Vui lòng điền đầy đủ thông tin lưu trú','error');err=true;}
   if(err){toast('Vui lòng điền đủ các trường bắt buộc (*)','error');return;}
+  const submitBtn=document.querySelector('#sec-declare .btn-primary');
+  if(submitBtn){submitBtn.disabled=true;}
+  showLoading('Đang nộp khai báo...');
+  const resetBtn=()=>{hideLoading();if(submitBtn){submitBtn.disabled=false;}};
+
   const save=async pd=>{
-    const newDecl={id:'D'+Date.now(),name,nationality,passportNo,visaExpiry,dob,gender,arrivalDate,days:parseInt(days),address,note,photoData:pd||null,stayType:'normal',declaredBy:currentUser.phone,declaredByName:currentUser.name,createdAt:new Date().toISOString().slice(0,10),approvalStatus:'pending',status:'active'};
-    await saveDeclaration(newDecl);
-    toast('Đã nộp khai báo, chờ admin xác nhận','success');
-    clearErrors();
-    ['d-name','d-nationality','d-passport','d-visaExpiry','d-dob','d-address','d-note'].forEach(id=>document.getElementById(id).value='');
-    document.getElementById('d-gender').value='';document.getElementById('d-days').value='';
-    document.getElementById('passportPhoto').value='';document.getElementById('photoPreview').style.display='none';
-    document.getElementById('aiStatus').style.display='none';
-    populateNationalityFilters();
-    if(currentUser.role==='admin')renderDashboard();else renderMyList();
+    try{
+      if(!_sb){toast('❌ Chưa kết nối dữ liệu — thử tải lại trang','error');resetBtn();return;}
+      const newDecl={id:'D'+Date.now(),name,nationality,passportNo,visaExpiry,dob,gender,arrivalDate,days:parseInt(days),address,note,photoData:pd||null,stayType:'normal',declaredBy:currentUser.phone,declaredByName:currentUser.name,createdAt:new Date().toISOString().slice(0,10),approvalStatus:'pending',status:'active'};
+      await saveDeclaration(newDecl);
+      toast('✅ Đã nộp khai báo, chờ admin xác nhận','success');
+      clearErrors();
+      ['d-name','d-nationality','d-passport','d-visaExpiry','d-dob','d-address','d-note'].forEach(id=>document.getElementById(id).value='');
+      document.getElementById('d-gender').value='';document.getElementById('d-days').value='';
+      document.getElementById('passportPhoto').value='';document.getElementById('photoPreview').style.display='none';
+      document.getElementById('aiStatus').style.display='none';
+      populateNationalityFilters();
+      if(currentUser.role==='admin')renderDashboard();else renderMyList();
+    }catch(e){
+      console.error('submitDeclare error:',e);
+      toast('❌ Lỗi khi nộp: '+(e.message||String(e)),'error');
+    }finally{resetBtn();}
   };
-  if(photoFile){const r=new FileReader();r.onload=async e=>await save(e.target.result);r.readAsDataURL(photoFile);}
+  if(photoFile){const r=new FileReader();r.onload=async e=>await save(e.target.result);r.onerror=()=>{toast('❌ Không đọc được ảnh','error');resetBtn();};r.readAsDataURL(photoFile);}
   else await save(null);
 }
 
 // ACTIONS
 function approveDecl(id){
   showConfirm('✅','Duyệt khai báo','Xác nhận duyệt khai báo tạm trú này?','btn-green',async ()=>{
-    const decls=getDeclarations();const idx=decls.findIndex(d=>d.id===id);if(idx<0)return;
+    showLoading('Đang duyệt...');
+    try{
+    const decls=getDeclarations();const idx=decls.findIndex(d=>d.id===id);if(idx<0){hideLoading();return;}
     decls[idx].approvalStatus='approved';decls[idx].approvedAt=new Date().toISOString().slice(0,10);
     await saveDeclaration(decls[idx]);toast('Đã duyệt khai báo','success');renderConfirm();renderDashboard();populateNationalityFilters();
+    }finally{hideLoading();}
   });
 }
 async function rejectDecl(id){
   const reason=prompt('Lý do từ chối (tùy chọn):')||'';
   const decls=getDeclarations();const idx=decls.findIndex(d=>d.id===id);if(idx<0)return;
+  showLoading('Đang xử lý...');
+  try{
   decls[idx].approvalStatus='rejected';decls[idx].rejectReason=reason;decls[idx].rejectedAt=new Date().toISOString().slice(0,10);
   await saveDeclaration(decls[idx]);toast('Đã từ chối khai báo','warning');renderConfirm();renderDashboard();
+  }finally{hideLoading();}
 }
 function checkoutDecl(id){
   showConfirm('🏁','Trả phòng','Xác nhận người nước ngoài này đã rời đi?','btn-gold',async ()=>{
-    const decls=getDeclarations();const idx=decls.findIndex(d=>d.id===id);if(idx<0)return;
+    showLoading('Đang xử lý...');
+    try{
+    const decls=getDeclarations();const idx=decls.findIndex(d=>d.id===id);if(idx<0){hideLoading();return;}
     decls[idx].status='checked-out';decls[idx].checkoutDate=new Date().toISOString().slice(0,10);
     await saveDeclaration(decls[idx]);toast('Đã trả phòng','success');renderAll();renderMyList();renderOvertime();renderDashboard();
+    }finally{hideLoading();}
   });
 }
 
@@ -1727,6 +1811,15 @@ function showConfirm(icon,title,msg,btnClass,cb){
 }
 
 // TOAST
+// GLOBAL LOADING
+function showLoading(msg='Đang xử lý...'){
+  document.getElementById('loadingMsg').textContent=msg;
+  document.getElementById('globalLoading').classList.add('show');
+}
+function hideLoading(){
+  document.getElementById('globalLoading').classList.remove('show');
+}
+
 function toast(msg,type='success'){
   const icons={success:'✅',error:'❌',warning:'⚠️'};
   const el=document.createElement('div');el.className=`toast ${type}`;el.innerHTML=`<span>${icons[type]||'ℹ️'}</span> ${msg}`;
@@ -2273,7 +2366,8 @@ function exportBizExcel(){
 // REFRESH DATA FROM SUPABASE
 async function refreshData(){
   const st=document.getElementById('sync-status');
-  if(st)st.textContent='⏳ Đang tải...';
+  if(st)st.textContent='';
+  showLoading('Đang tải dữ liệu mới nhất...');
   try{
     await loadAllData();
     populateNationalityFilters();
@@ -2291,11 +2385,10 @@ async function refreshData(){
       else if(id==='biz-accounts')renderBizAccounts();
       else if(id==='confirm-grouped')renderConfirmGrouped();
     }
-    if(st){st.textContent='✅ Đã cập nhật '+new Date().toLocaleTimeString('vi-VN');setTimeout(()=>{if(st)st.textContent='';},3000);}
+    if(st){st.textContent='✅ '+new Date().toLocaleTimeString('vi-VN');setTimeout(()=>{if(st)st.textContent='';},3000);}
   }catch(e){
-    if(st)st.textContent='❌ Lỗi tải dữ liệu';
     toast('Lỗi tải dữ liệu: '+e.message,'error');
-  }
+  }finally{hideLoading();}
 }
 
 // Update user doc comments live if profile section is visible
@@ -2348,6 +2441,18 @@ window.addEventListener('DOMContentLoaded',async ()=>{
   if(!connected){
     // showConnectError / showSqlSetupPrompt already handled display
   } else {
+    // Khôi phục session nếu còn hạn
+    const savedUser=loadSession();
+    if(savedUser){
+      // Verify user still exists and not blocked
+      const freshU=getUsers().find(u=>u.phone===savedUser.phone);
+      if(savedUser.phone==='admin'||(freshU&&!freshU.blocked)){
+        currentUser=savedUser.phone==='admin'?savedUser:{...freshU,role:'user'};
+        startApp();
+      } else {
+        clearSession();
+      }
+    }
     setInterval(async ()=>{if(currentUser&&_sb)await loadAllData();},45000);
   }
 });
