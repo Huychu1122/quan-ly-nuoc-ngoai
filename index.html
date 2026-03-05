@@ -6,6 +6,7 @@
 <title>Quản Lý Người Nước Ngoài - Công An Phường Tây Hồ</title>
 <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@300;400;500;600;700;800&family=Barlow+Condensed:wght@600;700;800&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <style>
 :root{--red:#c0392b;--red-dark:#922b21;--red-light:#fadbd8;--gold:#b8860b;--gold-light:#fef9e7;--navy:#1a2744;--navy-mid:#243460;--navy-light:#2e4080;--cyan:#1abc9c;--cyan-dark:#148f77;--cyan-light:#d5f5e3;--purple:#8e44ad;--purple-light:#f4ecf7;--gray-100:#f1f3f5;--gray-200:#e9ecef;--gray-400:#adb5bd;--gray-600:#6c757d;--gray-800:#343a40;--shadow:0 4px 20px rgba(0,0,0,.12);--shadow-lg:0 8px 40px rgba(0,0,0,.18);--radius:10px;--radius-lg:16px;}
@@ -309,6 +310,37 @@ tr.row-orange td:first-child{border-left:3px solid #e67e22;}
 <body>
 
 <!-- LOGIN -->
+
+<!-- SUPABASE SETUP MODAL -->
+<div class="modal-overlay" id="supabaseSetupModal" style="display:flex;z-index:99999">
+  <div class="modal" style="max-width:520px">
+    <div class="modal-header" style="background:linear-gradient(135deg,#1a2744,#2e4080);border-radius:16px 16px 0 0">
+      <h3 style="color:white">⚙️ Cấu hình kết nối dữ liệu</h3>
+    </div>
+    <div class="modal-body">
+      <div style="background:#eef6ff;border:1.5px solid #bee3f8;border-radius:10px;padding:14px 16px;margin-bottom:18px;font-size:13px;line-height:1.7;color:#1a365d">
+        <b>📋 Hướng dẫn lấy thông tin Supabase (miễn phí):</b><br>
+        1. Vào <a href="https://supabase.com" target="_blank" style="color:#2b6cb0;font-weight:700">supabase.com</a> → Đăng ký / Đăng nhập<br>
+        2. Tạo project mới → đặt tên bất kỳ, chọn region <b>Southeast Asia</b><br>
+        3. Vào <b>Project Settings → API</b><br>
+        4. Copy <b>Project URL</b> và <b>anon public key</b> dán vào đây
+      </div>
+      <div class="form-group">
+        <label>Project URL <span style="color:var(--red)">*</span></label>
+        <input type="text" id="sb-url-input" placeholder="https://xxxxxxxx.supabase.co" style="width:100%;padding:10px 14px;border:2px solid var(--gray-200);border-radius:8px;font-size:13px;font-family:inherit;outline:none">
+      </div>
+      <div class="form-group">
+        <label>Anon Public Key <span style="color:var(--red)">*</span></label>
+        <input type="text" id="sb-key-input" placeholder="eyJhbGci..." style="width:100%;padding:10px 14px;border:2px solid var(--gray-200);border-radius:8px;font-size:13px;font-family:inherit;outline:none">
+      </div>
+      <div id="sb-setup-status" style="font-size:13px;margin-top:8px;min-height:20px"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-sm btn-navy" onclick="initSupabase()" style="padding:10px 24px;font-size:14px">🔗 Kết nối & Khởi tạo</button>
+    </div>
+  </div>
+</div>
+
 <div id="loginScreen">
   <div class="auth-card">
     <div class="auth-logo">
@@ -369,7 +401,7 @@ tr.row-orange td:first-child{border-left:3px solid #e67e22;}
   </div>
 
   <div class="main">
-    <div class="topbar"><h3 id="topbarTitle">Tổng quan</h3></div>
+    <div class="topbar"><h3 id="topbarTitle">Tổng quan</h3><div style="display:flex;gap:8px;align-items:center"><button class="btn-sm btn-outline" onclick="refreshData()" title="Tải lại dữ liệu mới nhất" style="font-size:12px">🔄 Làm mới</button><span id="sync-status" style="font-size:11px;color:var(--gray-400)"></span></div></div>
     <div class="content">
 
       <!-- DASHBOARD -->
@@ -767,29 +799,187 @@ tr.row-orange td:first-child{border-left:3px solid #e67e22;}
 const ADMIN_USER='admin',ADMIN_PASS='admin123',IMPORT_PASS='admin123';
 let currentUser=null,_overtimeId=null,_overtimeOpt=null,_confirmCb=null;
 
-function saveData(k,v){localStorage.setItem(k,JSON.stringify(v));}
-function loadData(k,d=[]){try{const v=localStorage.getItem(k);return v?JSON.parse(v):d;}catch{return d;}}
-function getUsers(){return loadData('users',[]);}
-function saveUsers(u){saveData('users',u);}
-function getDeclarations(){return loadData('declarations',[]);}
-function saveDeclarations(d){saveData('declarations',d);}
+// ═══════════════════════════════════════════════════════
+// SUPABASE DATA LAYER
+// ═══════════════════════════════════════════════════════
+let _sb=null; // supabase client
+let _cache={users:[],declarations:[],bizProfiles:{}};
+let _cacheLoaded=false;
+
+function sbClient(){return _sb;}
+
+async function initSupabase(){
+  const urlEl=document.getElementById('sb-url-input');
+  const keyEl=document.getElementById('sb-key-input');
+  const status=document.getElementById('sb-setup-status');
+  const url=(urlEl?.value||'').trim();
+  const key=(keyEl?.value||'').trim();
+  if(!url||!key){status.innerHTML='<span style="color:red">⚠️ Vui lòng nhập đủ URL và Key</span>';return;}
+  if(!url.includes('supabase.co')){status.innerHTML='<span style="color:red">⚠️ URL không hợp lệ</span>';return;}
+  status.innerHTML='⏳ Đang kết nối...';
+  try{
+    _sb=supabase.createClient(url,key);
+    // Test connection by querying users table
+    const {error}=await _sb.from('users').select('phone').limit(1);
+    if(error&&error.code==='42P01'){
+      // Table doesn't exist — show SQL setup instructions
+      status.innerHTML=`<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:8px;padding:12px;font-size:12px;line-height:1.6">
+        <b>⚠️ Chưa có bảng dữ liệu!</b> Vào Supabase → <b>SQL Editor</b> → chạy SQL này:<br>
+        <textarea readonly onclick="this.select()" style="width:100%;margin-top:8px;font-size:11px;font-family:monospace;border:1px solid #ccc;border-radius:4px;padding:6px;height:120px;resize:none">CREATE TABLE users (phone text PRIMARY KEY, name text, address text, pass text, blocked boolean DEFAULT false);
+CREATE TABLE declarations (id text PRIMARY KEY, data jsonb);
+CREATE TABLE biz_profiles (phone text PRIMARY KEY, data jsonb);
+ALTER TABLE users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE declarations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE biz_profiles ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "allow_all" ON users FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "allow_all" ON declarations FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "allow_all" ON biz_profiles FOR ALL USING (true) WITH CHECK (true);</textarea>
+        <button onclick="retrySupabaseConnect('${url}','${key}')" class="btn-sm btn-navy" style="margin-top:8px;padding:6px 14px;font-size:12px">✅ Đã chạy SQL, thử lại</button>
+      </div>`;
+      // Save credentials for retry
+      localStorage.setItem('sb_url',url);localStorage.setItem('sb_key',key);
+      return;
+    }
+    if(error)throw error;
+    // Save credentials
+    localStorage.setItem('sb_url',url);localStorage.setItem('sb_key',key);
+    await finishSupabaseInit();
+  }catch(e){
+    console.error('Supabase init error:',e);
+    status.innerHTML=`<span style="color:red">❌ Lỗi: ${e.message||e}</span>`;
+  }
+}
+
+async function retrySupabaseConnect(url,key){
+  const status=document.getElementById('sb-setup-status');
+  status.innerHTML='⏳ Đang kết nối lại...';
+  _sb=supabase.createClient(url,key);
+  const {error}=await _sb.from('users').select('phone').limit(1);
+  if(error){status.innerHTML=`<span style="color:red">❌ Vẫn lỗi: ${error.message} — Kiểm tra lại SQL đã chạy chưa</span>`;return;}
+  localStorage.setItem('sb_url',url);localStorage.setItem('sb_key',key);
+  await finishSupabaseInit();
+}
+
+async function finishSupabaseInit(){
+  const status=document.getElementById('sb-setup-status');
+  status.innerHTML='✅ Kết nối thành công! Đang tải dữ liệu...';
+  await loadAllData();
+  document.getElementById('supabaseSetupModal').style.display='none';
+  status.innerHTML='';
+  toast('✅ Đã kết nối Supabase — dữ liệu đồng bộ toàn thiết bị','success');
+}
+
+async function tryAutoConnect(){
+  const url=localStorage.getItem('sb_url');
+  const key=localStorage.getItem('sb_key');
+  if(!url||!key)return false;
+  try{
+    _sb=supabase.createClient(url,key);
+    const {error}=await _sb.from('users').select('phone').limit(1);
+    if(error)return false;
+    await loadAllData();
+    document.getElementById('supabaseSetupModal').style.display='none';
+    return true;
+  }catch(e){return false;}
+}
+
+// Load all data into cache
+async function loadAllData(){
+  if(!_sb)return;
+  const [u,d,b]=await Promise.all([
+    _sb.from('users').select('*'),
+    _sb.from('declarations').select('*'),
+    _sb.from('biz_profiles').select('*'),
+  ]);
+  _cache.users=(u.data||[]);
+  _cache.declarations=(d.data||[]).map(r=>r.data);
+  _cache.bizProfiles={};
+  (b.data||[]).forEach(r=>{_cache.bizProfiles[r.phone]=r.data;});
+  _cacheLoaded=true;
+}
+
+// ── USERS ──
+function getUsers(){return _cache.users||[];}
+function saveUsers(arr){
+  _cache.users=arr;
+  // Sync to Supabase in background
+  if(!_sb)return;
+  arr.forEach(async u=>{
+    await _sb.from('users').upsert({phone:u.phone,name:u.name,address:u.address,pass:u.pass,blocked:u.blocked||false},{onConflict:'phone'});
+  });
+}
+async function saveUser(u){
+  _cache.users=_cache.users.filter(x=>x.phone!==u.phone).concat(u);
+  if(_sb)await _sb.from('users').upsert({phone:u.phone,name:u.name,address:u.address,pass:u.pass,blocked:u.blocked||false},{onConflict:'phone'});
+}
+async function deleteUser(phone){
+  _cache.users=_cache.users.filter(u=>u.phone!==phone);
+  if(_sb)await _sb.from('users').delete().eq('phone',phone);
+}
+
+// ── DECLARATIONS ──
+function getDeclarations(){return _cache.declarations||[];}
+function saveDeclarations(arr){
+  _cache.declarations=arr;
+  if(!_sb)return;
+  // Upsert all — batch
+  const rows=arr.map(d=>({id:d.id,data:d}));
+  _sb.from('declarations').upsert(rows,{onConflict:'id'});
+}
+async function saveDeclaration(d){
+  _cache.declarations=_cache.declarations.filter(x=>x.id!==d.id).concat(d);
+  if(_sb)await _sb.from('declarations').upsert({id:d.id,data:d},{onConflict:'id'});
+}
+async function deleteDeclarationById(id){
+  _cache.declarations=_cache.declarations.filter(d=>d.id!==id);
+  if(_sb)await _sb.from('declarations').delete().eq('id',id);
+}
+
+// ── BIZ PROFILES ──
+function getBizProfiles(){return _cache.bizProfiles||{};}
+function saveBizProfiles(obj){
+  _cache.bizProfiles=obj;
+  if(!_sb)return;
+  Object.entries(obj).forEach(async ([phone,data])=>{
+    await _sb.from('biz_profiles').upsert({phone,data},{onConflict:'phone'});
+  });
+}
+function saveBizProfile(phone,data){
+  _cache.bizProfiles[phone]=data;
+  if(_sb)_sb.from('biz_profiles').upsert({phone,data},{onConflict:'phone'});
+}
+function getBizProfile(phone){return (_cache.bizProfiles||{})[phone]||null;}
+
+// Legacy localStorage stubs (no longer used but prevent errors)
+function saveData(k,v){}
+function loadData(k,d){return d;}
 
 // AUTH
 function showScreen(id){['loginScreen','registerScreen'].forEach(s=>document.getElementById(s).style.display='none');document.getElementById(id).style.display='flex';}
-function doLogin(){
+async function doLogin(){
   const user=document.getElementById('loginUser').value.trim();
   const pass=document.getElementById('loginPass').value;
   if(!user||!pass){toast('Vui lòng nhập đầy đủ thông tin','error');return;}
-  if(user===ADMIN_USER&&pass===ADMIN_PASS){currentUser={phone:'admin',name:'Quản trị viên',role:'admin',address:'CA Phường Tây Hồ'};startApp();}
-  else{
-    const u=getUsers().find(u=>u.phone===user&&u.pass===pass);
-    if(u){
-      if(u.blocked){toast('🚫 Tài khoản của bạn đã bị chặn. Vui lòng liên hệ Công An Phường Tây Hồ.','error');return;}
-      currentUser={...u,role:'user'};startApp();
-    }else toast('Sai thông tin đăng nhập','error');
+  const loginBtn=document.querySelector('#loginScreen .btn-primary');
+  if(loginBtn){loginBtn.disabled=true;loginBtn.textContent='⏳ Đang đăng nhập...';}
+  try{
+    // Reload fresh data before login
+    if(_sb)await loadAllData();
+    if(user===ADMIN_USER&&pass===ADMIN_PASS){
+      currentUser={phone:'admin',name:'Quản trị viên',role:'admin',address:'CA Phường Tây Hồ'};
+      startApp();
+    } else {
+      const u=getUsers().find(u=>u.phone===user&&u.pass===pass);
+      if(u){
+        if(u.blocked){toast('🚫 Tài khoản của bạn đã bị chặn. Vui lòng liên hệ Công An Phường Tây Hồ.','error');return;}
+        currentUser={...u,role:'user'};startApp();
+      } else toast('Sai thông tin đăng nhập','error');
+    }
+  } finally {
+    if(loginBtn){loginBtn.disabled=false;loginBtn.textContent='🔐 ĐĂNG NHẬP';}
   }
 }
-function doRegister(){
+async function doRegister(){
   const name=document.getElementById('regName').value.trim(),phone=document.getElementById('regPhone').value.trim();
   const address=document.getElementById('regAddress').value.trim(),pass=document.getElementById('regPass').value;
   if(!name||!phone||!address||!pass){toast('Vui lòng nhập đầy đủ thông tin','error');return;}
@@ -797,7 +987,8 @@ function doRegister(){
   if(pass.length<6){toast('Mật khẩu tối thiểu 6 ký tự','error');return;}
   const users=getUsers();
   if(users.find(u=>u.phone===phone)){toast('Số điện thoại đã đăng ký','error');return;}
-  users.push({phone,name,address,pass});saveUsers(users);
+  const newUser={phone,name,address,pass,blocked:false};
+  await saveUser(newUser);
   toast('Đăng ký thành công! Vui lòng đăng nhập','success');showScreen('loginScreen');
 }
 function doLogout(){currentUser=null;document.getElementById('app').style.display='none';showScreen('loginScreen');document.getElementById('loginUser').value='';document.getElementById('loginPass').value='';}
@@ -980,13 +1171,13 @@ function selectOvertimeOpt(opt){
   document.getElementById('ot-opt-extend').classList.toggle('selected',opt==='extend');
   document.getElementById('ot-extend-wrap').style.display=opt==='extend'?'block':'none';
 }
-function confirmOvertime(){
+async function confirmOvertime(){
   if(!_overtimeOpt){toast('Vui lòng chọn hình thức xử lý','error');return;}
   const decls=getDeclarations();
   const idx=decls.findIndex(d=>d.id===_overtimeId);if(idx<0)return;
   if(_overtimeOpt==='rent'){decls[idx].stayType='rent';toast('Đã chuyển sang thuê nhà/ở lâu dài','success');}
   else{const extra=parseInt(document.getElementById('ot-extra-days').value);if(!extra||extra<1){toast('Vui lòng nhập số ngày hợp lệ','error');return;}decls[idx].days=(decls[idx].days||0)+extra;toast(`Đã gia hạn thêm ${extra} ngày`,'success');}
-  saveDeclarations(decls);closeModal('overtimeModal');renderOvertime();renderDashboard();renderAll();
+  await saveDeclaration(decls[idx]);closeModal('overtimeModal');renderOvertime();renderDashboard();renderAll();
 }
 
 // REJECTED
@@ -1284,7 +1475,7 @@ function clearErrors(){
   ['d-name','d-nationality','d-passport','d-visaExpiry','d-dob','d-gender'].forEach(id=>{const el=document.getElementById(id);if(el)el.classList.remove('error');});
 }
 function setErr(fId,eId,msg){const f=document.getElementById(fId),e=document.getElementById(eId);if(f)f.classList.add('error');if(e)e.textContent=msg;}
-function submitDeclare(){
+async function submitDeclare(){
   // Check if user is blocked
   const myUsers=getUsers();const myU=myUsers.find(u=>u.phone===currentUser.phone);
   if(myU?.blocked){toast('🚫 Tài khoản bị chặn — không thể khai báo. Liên hệ Công An Phường Tây Hồ.','error');return;}
@@ -1309,10 +1500,9 @@ function submitDeclare(){
   if(!gender){setErr('d-gender','err-gender','Vui lòng chọn giới tính');err=true;}
   if(!arrivalDate||!days||!address){toast('Vui lòng điền đầy đủ thông tin lưu trú','error');err=true;}
   if(err){toast('Vui lòng điền đủ các trường bắt buộc (*)','error');return;}
-  const save=pd=>{
-    const decls=getDeclarations();
-    decls.push({id:'D'+Date.now(),name,nationality,passportNo,visaExpiry,dob,gender,arrivalDate,days:parseInt(days),address,note,photoData:pd||null,stayType:'normal',declaredBy:currentUser.phone,declaredByName:currentUser.name,createdAt:new Date().toISOString().slice(0,10),approvalStatus:'pending',status:'active'});
-    saveDeclarations(decls);
+  const save=async pd=>{
+    const newDecl={id:'D'+Date.now(),name,nationality,passportNo,visaExpiry,dob,gender,arrivalDate,days:parseInt(days),address,note,photoData:pd||null,stayType:'normal',declaredBy:currentUser.phone,declaredByName:currentUser.name,createdAt:new Date().toISOString().slice(0,10),approvalStatus:'pending',status:'active'};
+    await saveDeclaration(newDecl);
     toast('Đã nộp khai báo, chờ admin xác nhận','success');
     clearErrors();
     ['d-name','d-nationality','d-passport','d-visaExpiry','d-dob','d-address','d-note'].forEach(id=>document.getElementById(id).value='');
@@ -1322,29 +1512,29 @@ function submitDeclare(){
     populateNationalityFilters();
     if(currentUser.role==='admin')renderDashboard();else renderMyList();
   };
-  if(photoFile){const r=new FileReader();r.onload=e=>save(e.target.result);r.readAsDataURL(photoFile);}
-  else save(null);
+  if(photoFile){const r=new FileReader();r.onload=async e=>await save(e.target.result);r.readAsDataURL(photoFile);}
+  else await save(null);
 }
 
 // ACTIONS
 function approveDecl(id){
-  showConfirm('✅','Duyệt khai báo','Xác nhận duyệt khai báo tạm trú này?','btn-green',()=>{
+  showConfirm('✅','Duyệt khai báo','Xác nhận duyệt khai báo tạm trú này?','btn-green',async ()=>{
     const decls=getDeclarations();const idx=decls.findIndex(d=>d.id===id);if(idx<0)return;
     decls[idx].approvalStatus='approved';decls[idx].approvedAt=new Date().toISOString().slice(0,10);
-    saveDeclarations(decls);toast('Đã duyệt khai báo','success');renderConfirm();renderDashboard();populateNationalityFilters();
+    await saveDeclaration(decls[idx]);toast('Đã duyệt khai báo','success');renderConfirm();renderDashboard();populateNationalityFilters();
   });
 }
-function rejectDecl(id){
+async function rejectDecl(id){
   const reason=prompt('Lý do từ chối (tùy chọn):')||'';
   const decls=getDeclarations();const idx=decls.findIndex(d=>d.id===id);if(idx<0)return;
   decls[idx].approvalStatus='rejected';decls[idx].rejectReason=reason;decls[idx].rejectedAt=new Date().toISOString().slice(0,10);
-  saveDeclarations(decls);toast('Đã từ chối khai báo','warning');renderConfirm();renderDashboard();
+  await saveDeclaration(decls[idx]);toast('Đã từ chối khai báo','warning');renderConfirm();renderDashboard();
 }
 function checkoutDecl(id){
-  showConfirm('🏁','Trả phòng','Xác nhận người nước ngoài này đã rời đi?','btn-gold',()=>{
+  showConfirm('🏁','Trả phòng','Xác nhận người nước ngoài này đã rời đi?','btn-gold',async ()=>{
     const decls=getDeclarations();const idx=decls.findIndex(d=>d.id===id);if(idx<0)return;
     decls[idx].status='checked-out';decls[idx].checkoutDate=new Date().toISOString().slice(0,10);
-    saveDeclarations(decls);toast('Đã trả phòng','success');renderAll();renderMyList();renderOvertime();renderDashboard();
+    await saveDeclaration(decls[idx]);toast('Đã trả phòng','success');renderAll();renderMyList();renderOvertime();renderDashboard();
   });
 }
 
@@ -1437,19 +1627,20 @@ function doImport(){
   const file=document.getElementById('importFile').files[0];
   if(!file){toast('Vui lòng chọn file','error');return;}
   const reader=new FileReader();
-  reader.onload=e=>{
+  reader.onload=async e=>{
     try{
       const wb=XLSX.read(e.target.result,{type:'binary'});
       const rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
-      const decls=getDeclarations();let added=0;
+      const decls=getDeclarations();let added=0;const newDecls=[];
       rows.forEach(r=>{
         if(!r['Họ và tên']||!r['Số hộ chiếu'])return;
         if(decls.find(d=>d.passportNo===String(r['Số hộ chiếu'])))return;
-        decls.push({id:'I'+Date.now()+Math.random().toString(36).slice(2,6),name:r['Họ và tên']||'',nationality:r['Quốc tịch']||'',passportNo:String(r['Số hộ chiếu']||''),visaExpiry:r['Hạn thị thực']||'',dob:r['Ngày sinh']||'',gender:r['Giới tính']||'',arrivalDate:r['Ngày đến']||new Date().toISOString().slice(0,10),days:parseInt(r['Số ngày'])||30,address:r['Địa chỉ tạm trú']||'',note:r['Ghi chú']||'',photoData:null,stayType:'normal',declaredBy:currentUser.phone,declaredByName:currentUser.name,createdAt:new Date().toISOString().slice(0,10),approvalStatus:currentUser.role==='admin'?'approved':'pending',status:'active'});
+        newDecls.push({id:'I'+Date.now()+Math.random().toString(36).slice(2,6),name:r['Họ và tên']||'',nationality:r['Quốc tịch']||'',passportNo:String(r['Số hộ chiếu']||''),visaExpiry:r['Hạn thị thực']||'',dob:r['Ngày sinh']||'',gender:r['Giới tính']||'',arrivalDate:r['Ngày đến']||new Date().toISOString().slice(0,10),days:parseInt(r['Số ngày'])||30,address:r['Địa chỉ tạm trú']||'',note:r['Ghi chú']||'',photoData:null,stayType:'normal',declaredBy:currentUser.phone,declaredByName:currentUser.name,createdAt:new Date().toISOString().slice(0,10),approvalStatus:currentUser.role==='admin'?'approved':'pending',status:'active'});
         added++;
       });
-      saveDeclarations(decls);toast(`Nhập thành công ${added} bản ghi`,'success');closeModal('importModal');populateNationalityFilters();if(currentUser.role==='admin')renderDashboard();
-    }catch{toast('Lỗi đọc file Excel','error');}
+      await Promise.all(newDecls.map(d=>saveDeclaration(d)));
+      toast(`Nhập thành công ${added} bản ghi`,'success');closeModal('importModal');populateNationalityFilters();if(currentUser.role==='admin')renderDashboard();
+    }catch(e){toast('Lỗi đọc file Excel: '+e.message,'error');}
   };
   reader.readAsBinaryString(file);
 }
@@ -1668,7 +1859,7 @@ function viewBizDetail(phone){
 }
 
 // BLOCK / UNBLOCK
-function toggleBlockBiz(phone, block){
+async function toggleBlockBiz(phone, block){
   showConfirm(
     block?'🚫':'🔓',
     block?'Chặn khai báo':'Mở chặn',
@@ -1676,13 +1867,13 @@ function toggleBlockBiz(phone, block){
       ?'Hộ kinh doanh này sẽ không thể khai báo tạm trú cho đến khi được mở chặn.'
       :'Hộ kinh doanh này sẽ được phép khai báo tạm trú trở lại.',
     block?'btn-red':'btn-green',
-    ()=>{
+    async ()=>{
       // Read fresh from storage, update, save back
       const users=getUsers();
       const idx=users.findIndex(u=>u.phone===phone);
       if(idx===-1){toast('Không tìm thấy tài khoản','error');return;}
       users[idx].blocked=block;
-      saveUsers(users);
+      await saveUser(users[idx]);
       // Verify saved correctly
       const verify=getUsers().find(u=>u.phone===phone);
       console.log('After save blocked=', verify?.blocked, 'for', phone);
@@ -1705,14 +1896,14 @@ function confirmDeleteBiz(phone){
     '🗑️','Xóa tài khoản hộ kinh doanh',
     `Xóa tài khoản "${bizName}"? Hành động này không thể hoàn tác. Tất cả khai báo của hộ này sẽ vẫn được lưu.`,
     'btn-red',
-    ()=>{
+    async ()=>{
       // Remove user
-      const newUsers=users.filter(u=>u.phone!==phone);
-      saveUsers(newUsers);
+      await deleteUser(phone);
       // Remove biz profile
       const allProfiles=getBizProfiles();
       delete allProfiles[phone];
       saveBizProfiles(allProfiles);
+      // Note: declarations are kept for record
       toast('🗑️ Đã xóa tài khoản hộ kinh doanh','success');
       renderBizAccounts();
       renderDashboard();
@@ -1862,22 +2053,24 @@ function renderConfirmGrouped(){
 }
 
 function approveGroupAll(phone){
-  showConfirm('✅','Duyệt tất cả','Duyệt tất cả khai báo của hộ này?','btn-green',()=>{
+  showConfirm('✅','Duyệt tất cả','Duyệt tất cả khai báo của hộ này?','btn-green',async ()=>{
     const decls=getDeclarations();
     let count=0;
-    decls.forEach(d=>{if(d.declaredBy===phone&&d.approvalStatus==='pending'){d.approvalStatus='approved';d.approvedAt=new Date().toISOString().slice(0,10);count++;}});
-    saveDeclarations(decls);
+    const toSave=[];
+    decls.forEach(d=>{if(d.declaredBy===phone&&d.approvalStatus==='pending'){d.approvalStatus='approved';d.approvedAt=new Date().toISOString().slice(0,10);count++;toSave.push(d);}});
+    await Promise.all(toSave.map(d=>saveDeclaration(d)));
     toast(`Đã duyệt ${count} khai báo`,'success');
     renderConfirmGrouped();renderDashboard();populateNationalityFilters();
   });
 }
 
 function approveAllPending(){
-  showConfirm('✅','Duyệt tất cả','Duyệt TẤT CẢ khai báo đang chờ xác nhận?','btn-green',()=>{
+  showConfirm('✅','Duyệt tất cả','Duyệt TẤT CẢ khai báo đang chờ xác nhận?','btn-green',async ()=>{
     const decls=getDeclarations();
     let count=0;
-    decls.forEach(d=>{if(d.approvalStatus==='pending'){d.approvalStatus='approved';d.approvedAt=new Date().toISOString().slice(0,10);count++;}});
-    saveDeclarations(decls);
+    const toSave=[];
+    decls.forEach(d=>{if(d.approvalStatus==='pending'){d.approvalStatus='approved';d.approvedAt=new Date().toISOString().slice(0,10);count++;toSave.push(d);}});
+    await Promise.all(toSave.map(d=>saveDeclaration(d)));
     toast(`Đã duyệt ${count} khai báo`,'success');
     renderConfirmGrouped();renderDashboard();populateNationalityFilters();
   });
@@ -2010,6 +2203,34 @@ function exportBizExcel(){
   XLSX.writeFile(wb,`HoKinhDoanh_${new Date().toISOString().slice(0,10)}.xlsx`);
   toast('Xuất Excel thành công','success');
 }
+// REFRESH DATA FROM SUPABASE
+async function refreshData(){
+  const st=document.getElementById('sync-status');
+  if(st)st.textContent='⏳ Đang tải...';
+  try{
+    await loadAllData();
+    populateNationalityFilters();
+    // Re-render current section
+    const active=document.querySelector('.section.active');
+    if(active){
+      const id=active.id.replace('sec-','');
+      if(id==='dashboard')renderDashboard();
+      else if(id==='confirm-today')renderConfirm();
+      else if(id==='all-list')renderAll();
+      else if(id==='overtime')renderOvertime();
+      else if(id==='rejected')renderRejected();
+      else if(id==='checked-out')renderCheckedOut();
+      else if(id==='my-list')renderMyList();
+      else if(id==='biz-accounts')renderBizAccounts();
+      else if(id==='confirm-grouped')renderConfirmGrouped();
+    }
+    if(st){st.textContent='✅ Đã cập nhật '+new Date().toLocaleTimeString('vi-VN');setTimeout(()=>{if(st)st.textContent='';},3000);}
+  }catch(e){
+    if(st)st.textContent='❌ Lỗi tải dữ liệu';
+    toast('Lỗi tải dữ liệu: '+e.message,'error');
+  }
+}
+
 // Update user doc comments live if profile section is visible
 function updateDeclareBanners(){
   if(!currentUser||currentUser.role==='admin')return;
@@ -2047,7 +2268,18 @@ function updateUserDocCommentDisplay(){
 
 // UTIL
 function togglePw(id,btn){const inp=document.getElementById(id);if(inp.type==='password'){inp.type='text';btn.textContent='🙈';}else{inp.type='password';btn.textContent='👁️';}}
-window.addEventListener('DOMContentLoaded',()=>{document.getElementById('d-arrivalDate').value=new Date().toISOString().slice(0,10);});
+window.addEventListener('DOMContentLoaded',async ()=>{
+  document.getElementById('d-arrivalDate').value=new Date().toISOString().slice(0,10);
+  const connected=await tryAutoConnect();
+  if(!connected){
+    document.getElementById('supabaseSetupModal').style.display='flex';
+  } else {
+    // Auto-refresh data every 45s
+    setInterval(async ()=>{
+      if(currentUser&&_sb){await loadAllData();}
+    },45000);
+  }
+});
 </script>
 
 <!-- LIGHTBOX -->
