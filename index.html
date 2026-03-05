@@ -421,32 +421,6 @@ tr.row-orange td:first-child{border-left:3px solid #e67e22;}
 </head>
 <body>
 
-<!-- LOGIN -->
-
-    <div class="modal-body">
-      <div style="background:#eef6ff;border:1.5px solid #bee3f8;border-radius:10px;padding:14px 16px;margin-bottom:18px;font-size:13px;line-height:1.7;color:#1a365d">
-        <b>📋 Hướng dẫn lấy thông tin Supabase (miễn phí):</b><br>
-        1. Vào <a href="https://supabase.com" target="_blank" style="color:#2b6cb0;font-weight:700">supabase.com</a> → Đăng ký / Đăng nhập<br>
-        2. Tạo project mới → đặt tên bất kỳ, chọn region <b>Southeast Asia</b><br>
-        3. Vào <b>Project Settings → API</b><br>
-        4. Copy <b>Project URL</b> và <b>anon public key</b> dán vào đây
-      </div>
-      <div class="form-group">
-        <label>Project URL <span style="color:var(--red)">*</span></label>
-        <input type="text" id="sb-url-input" placeholder="https://xxxxxxxx.supabase.co" style="width:100%;padding:10px 14px;border:2px solid var(--gray-200);border-radius:8px;font-size:13px;font-family:inherit;outline:none">
-      </div>
-      <div class="form-group">
-        <label>Anon Public Key <span style="color:var(--red)">*</span></label>
-        <input type="text" id="sb-key-input" placeholder="eyJhbGci..." style="width:100%;padding:10px 14px;border:2px solid var(--gray-200);border-radius:8px;font-size:13px;font-family:inherit;outline:none">
-      </div>
-      <div id="sb-setup-status" style="font-size:13px;margin-top:8px;min-height:20px"></div>
-    </div>
-    <div class="modal-footer">
-      <button class="btn-sm btn-navy" onclick="initSupabase()" style="padding:10px 24px;font-size:14px">🔗 Kết nối & Khởi tạo</button>
-    </div>
-  </div>
-</div>
-
 <div id="loginScreen">
   <div class="auth-card">
     <div class="auth-logo">
@@ -914,18 +888,66 @@ let _cacheLoaded=false;
 
 function sbClient(){return _sb;}
 
+function initSupabase(){} // no-op, credentials hardcoded
 // Supabase credentials hardcoded — no manual setup needed
 async function tryAutoConnect(){
-  // Credentials hardcoded — no setup needed
   const url='https://olxgzrykozdcwqxtvell.supabase.co';
   const key='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9seGd6cnlrb3pkY3dxeHR2ZWxsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI3MDEzMDcsImV4cCI6MjA4ODI3NzMwN30.YHPIBBef8d1QAg3y5JaAzuC6Oqi3xaXbgWe23OzMSRU';
   try{
     _sb=supabase.createClient(url,key);
-    const {error}=await _sb.from('users').select('phone').limit(1);
-    if(error){console.error('Supabase connect error:',error);return false;}
+    const {data,error}=await _sb.from('users').select('phone').limit(1);
+    if(error){
+      const msg=error.message||error.details||error.hint||JSON.stringify(error);
+      console.error('Supabase connect error details:',JSON.stringify(error));
+      // If table doesn't exist yet — show SQL setup prompt
+      if(error.code==='42P01'||msg.includes('relation')||msg.includes('does not exist')){
+        showSqlSetupPrompt();
+        return false;
+      }
+      // Otherwise just warn but continue — might be empty table (PGRST116 = no rows is OK)
+      if(error.code==='PGRST116'||msg.includes('0 rows')){
+        await loadAllData();
+        return true;
+      }
+      showConnectError(msg);
+      return false;
+    }
     await loadAllData();
     return true;
-  }catch(e){console.error('Supabase error:',e);return false;}
+  }catch(e){
+    console.error('Supabase exception:',e);
+    showConnectError(e.message||String(e));
+    return false;
+  }
+}
+
+function showConnectError(msg){
+  const loadingDiv=document.getElementById('db-loading');
+  if(loadingDiv)loadingDiv.remove();
+  const loginCard=document.querySelector('.auth-card');
+  if(!loginCard)return;
+  const existing=document.getElementById('conn-err');
+  if(existing)existing.remove();
+  const d=document.createElement('div');
+  d.id='conn-err';
+  d.style='background:#fadbd8;border:1px solid #f1948a;border-radius:8px;padding:12px 16px;font-size:13px;color:#922b21;margin-bottom:16px;line-height:1.5';
+  d.innerHTML='⚠️ Không kết nối được Supabase.<br><small style="opacity:.8">'+msg+'</small><br><button onclick="location.reload()" style="margin-top:8px;padding:4px 12px;background:var(--red);color:white;border:none;border-radius:6px;cursor:pointer;font-size:12px">🔄 Thử lại</button>';
+  loginCard.prepend(d);
+}
+
+function showSqlSetupPrompt(){
+  const loadingDiv=document.getElementById('db-loading');
+  if(loadingDiv)loadingDiv.remove();
+  const d=document.createElement('div');
+  d.style='position:fixed;inset:0;background:rgba(26,39,68,.95);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px';
+  const sql='CREATE TABLE IF NOT EXISTS users (phone text PRIMARY KEY, name text, address text, pass text, blocked boolean DEFAULT false);\nCREATE TABLE IF NOT EXISTS declarations (id text PRIMARY KEY, data jsonb);\nCREATE TABLE IF NOT EXISTS biz_profiles (phone text PRIMARY KEY, data jsonb);\nALTER TABLE users ENABLE ROW LEVEL SECURITY;\nALTER TABLE declarations ENABLE ROW LEVEL SECURITY;\nALTER TABLE biz_profiles ENABLE ROW LEVEL SECURITY;\nCREATE POLICY IF NOT EXISTS "allow_all" ON users FOR ALL USING (true) WITH CHECK (true);\nCREATE POLICY IF NOT EXISTS "allow_all" ON declarations FOR ALL USING (true) WITH CHECK (true);\nCREATE POLICY IF NOT EXISTS "allow_all" ON biz_profiles FOR ALL USING (true) WITH CHECK (true);';
+  d.innerHTML='<div style="background:white;border-radius:16px;padding:28px;max-width:560px;width:100%">'
+    +'<h3 style="margin-bottom:12px;color:#1a2744">⚙️ Cần khởi tạo bảng dữ liệu</h3>'
+    +'<p style="font-size:13px;margin-bottom:12px;color:#555">Vào <b>Supabase → SQL Editor</b> và chạy SQL sau:</p>'
+    +'<textarea onclick="this.select()" readonly style="width:100%;height:160px;font-size:11px;font-family:monospace;border:1px solid #ccc;border-radius:6px;padding:8px;resize:none">'+sql+'</textarea>'
+    +'<button onclick="location.reload()" style="margin-top:14px;width:100%;padding:12px;background:#1a2744;color:white;border:none;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer">✅ Đã chạy SQL → Tải lại trang</button>'
+    +'</div>';
+  document.body.appendChild(d);
 }
 
 // Load all data into cache
@@ -2324,11 +2346,7 @@ window.addEventListener('DOMContentLoaded',async ()=>{
   const connected=await tryAutoConnect();
   loadingDiv.remove();
   if(!connected){
-    // Show error on login screen
-    const errDiv=document.createElement('div');
-    errDiv.style='background:#fadbd8;border:1px solid #f1948a;border-radius:8px;padding:12px 16px;text-align:center;font-size:13px;color:#922b21;margin-bottom:16px';
-    errDiv.textContent='⚠️ Không kết nối được dữ liệu. Kiểm tra mạng và thử lại.';
-    loginScreen?.querySelector('.auth-card')?.prepend(errDiv);
+    // showConnectError / showSqlSetupPrompt already handled display
   } else {
     setInterval(async ()=>{if(currentUser&&_sb)await loadAllData();},45000);
   }
