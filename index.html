@@ -2,7 +2,7 @@
 <html lang="vi">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -627,6 +627,10 @@ tr.row-orange td:first-child{border-left:3px solid #e67e22;}
                   <label>📸 Ảnh hộ chiếu / thị thực</label>
                   <div class="photo-upload-area" id="uploadArea">
                     <input type="file" id="passportPhoto" accept="image/*" onchange="handlePhotoUpload(this)">
+                    <div id="photoActions" style="display:none;margin-top:8px;display:none;gap:8px;flex-wrap:wrap">
+                      <button type="button" class="btn-sm btn-cyan" onclick="triggerAiScan()" id="scanBtn">🔍 Nhận diện tự động</button>
+                      <button type="button" class="btn-sm btn-outline" onclick="removePassportPhoto()" style="color:var(--red);border-color:var(--red)">🗑️ Xóa ảnh</button>
+                    </div>
                     <div class="upload-icon">📷</div>
                     <p>Nhấn để chụp / tải ảnh — AI sẽ tự nhận diện thông tin</p>
                     <p style="font-size:12px;color:var(--gray-400);margin-top:3px">JPG, PNG, WEBP</p>
@@ -1118,9 +1122,13 @@ async function doRegister(){
   if(pass.length<6){toast('Mật khẩu tối thiểu 6 ký tự','error');return;}
   const users=getUsers();
   if(users.find(u=>u.phone===phone)){toast('Số điện thoại đã đăng ký','error');return;}
-  const newUser={phone,name,address,pass,blocked:false};
-  await saveUser(newUser);
-  toast('Đăng ký thành công! Vui lòng đăng nhập','success');showScreen('loginScreen');
+  showLoading('Đang tạo tài khoản...');
+  try{
+    const newUser={phone,name,address,pass,blocked:false};
+    await saveUser(newUser);
+    toast('✅ Đăng ký thành công! Vui lòng đăng nhập','success');showScreen('loginScreen');
+  }catch(e){toast('❌ Lỗi đăng ký: '+(e.message||String(e)),'error');}
+  finally{hideLoading();}
 }
 function doLogout(){currentUser=null;clearSession();document.getElementById('app').style.display='none';showScreen('loginScreen');document.getElementById('loginUser').value='';document.getElementById('loginPass').value='';}
 function startApp(){
@@ -1355,23 +1363,45 @@ function renderMyList(){
 }
 
 // AI SCAN
-async function handlePhotoUpload(input){
+let _currentPhotoData=null;
+function handlePhotoUpload(input){
   if(!input.files.length)return;
   const file=input.files[0];
   const reader=new FileReader();
-  reader.onload=async e=>{
+  reader.onload=e=>{
+    _currentPhotoData=e.target.result;
     const img=document.getElementById('photoPreview');
     img.src=e.target.result;img.style.display='block';
-    setAiStatus('scanning','🔄 Đang nhận diện...');
-    try{await scanPassportWithAI(e.target.result);}
-    catch(err){
-      console.error('Scan error:',err);
-      const msg=err.message||'Lỗi không xác định';
-      setAiStatus('fail','❌ '+msg.slice(0,60));
-      toast('AI lỗi: '+msg.slice(0,80),'error');
-    }
+    document.getElementById('aiStatus').style.display='none';
+    // Show action buttons
+    const actions=document.getElementById('photoActions');
+    if(actions)actions.style.display='flex';
   };
   reader.readAsDataURL(file);
+}
+function removePassportPhoto(){
+  _currentPhotoData=null;
+  document.getElementById('passportPhoto').value='';
+  const img=document.getElementById('photoPreview');
+  img.src='';img.style.display='none';
+  document.getElementById('aiStatus').style.display='none';
+  const actions=document.getElementById('photoActions');
+  if(actions)actions.style.display='none';
+  toast('Đã xóa ảnh','success');
+}
+async function triggerAiScan(){
+  if(!_currentPhotoData){toast('Vui lòng chọn ảnh trước','warning');return;}
+  const btn=document.getElementById('scanBtn');
+  if(btn){btn.disabled=true;btn.textContent='⏳ Đang nhận diện...';}
+  try{await scanPassportWithAI(_currentPhotoData);}
+  catch(err){
+    console.error('Scan error:',err);
+    const msg=err.message||'Lỗi không xác định';
+    setAiStatus('fail','❌ '+msg.slice(0,60));
+    toast('Lỗi nhận diện: '+msg.slice(0,80),'error');
+  }finally{
+    if(btn){btn.disabled=false;btn.textContent='🔍 Nhận diện tự động';}
+  }
 }
 function setAiStatus(type,msg){const el=document.getElementById('aiStatus');el.textContent=msg;el.className='ai-status '+type;el.style.display='';}
 
@@ -2028,20 +2058,17 @@ async function toggleBlockBiz(phone, block){
       :'Hộ kinh doanh này sẽ được phép khai báo tạm trú trở lại.',
     block?'btn-red':'btn-green',
     async ()=>{
-      // Read fresh from storage, update, save back
-      const users=getUsers();
-      const idx=users.findIndex(u=>u.phone===phone);
-      if(idx===-1){toast('Không tìm thấy tài khoản','error');return;}
-      users[idx].blocked=block;
-      await saveUser(users[idx]);
-      // Verify saved correctly
-      const verify=getUsers().find(u=>u.phone===phone);
-      console.log('After save blocked=', verify?.blocked, 'for', phone);
-      toast(block?'🚫 Đã chặn tài khoản':'🔓 Đã mở chặn tài khoản', block?'warning':'success');
-      renderBizAccounts();
-      renderDashboard();
-      // Close and reopen detail modal with fresh data so buttons update
-      closeModal('bizDetailModal');
+      showLoading(block?'Đang chặn tài khoản...':'Đang mở chặn...');
+      try{
+        const users=getUsers();
+        const idx=users.findIndex(u=>u.phone===phone);
+        if(idx===-1){toast('Không tìm thấy tài khoản','error');return;}
+        users[idx].blocked=block;
+        await saveUser(users[idx]);
+        toast(block?'🚫 Đã chặn tài khoản':'🔓 Đã mở chặn tài khoản', block?'warning':'success');
+        renderBizAccounts();renderDashboard();
+        closeModal('bizDetailModal');
+      }finally{hideLoading();}
     }
   );
 }
@@ -2073,6 +2100,8 @@ function confirmDeleteBiz(phone){
 
 // Doc status & comment helpers (admin)
 function setDocStatus(phone, docKey, status){
+  showLoading('Đang lưu...');
+  setTimeout(()=>{hideLoading();},800);
   const p=getBizProfile(phone)||{};
   p[docKey+'_status']=status;
   saveBizProfile(phone,p);
@@ -2095,6 +2124,8 @@ function saveDocComment(phone, docKey){
   const inp=document.getElementById(`comment-input-${phone}-${docKey}`);
   if(!inp)return;
   const comment=inp.value.trim();
+  showLoading('Đang lưu bình luận...');
+  setTimeout(()=>{hideLoading();},600);
   const p=getBizProfile(phone)||{};
   p[docKey+'_comment']=comment;
   saveBizProfile(phone,p);
@@ -2311,40 +2342,73 @@ function handleDocUpload(type,input){
       if(pdfEl)pdfEl.style.display='none';
       if(imgEl){imgEl.src=e.target.result;imgEl.style.display='block';}
     }
+    // Show delete button
+    let delBtn=document.getElementById('deldoc-'+type);
+    if(!delBtn&&card){
+      delBtn=document.createElement('button');
+      delBtn.id='deldoc-'+type;
+      delBtn.type='button';
+      delBtn.className='btn-sm';
+      delBtn.style='margin-top:8px;color:var(--red);border:1.5px solid var(--red);background:white;border-radius:8px;padding:5px 12px;font-size:12px;cursor:pointer;width:100%';
+      delBtn.innerHTML='🗑️ Xóa file đã chọn';
+      delBtn.onclick=()=>removeDocUpload(type);
+      card.appendChild(delBtn);
+    }
   };
   reader.readAsDataURL(file);
 }
+function removeDocUpload(type){
+  _docUploads[type]=null;_docMimes[type]=null;
+  // Reset file input
+  const inputs=document.querySelectorAll('input[onchange*="handleDocUpload"]');
+  inputs.forEach(inp=>{if(inp.getAttribute('onchange').includes("'"+type+"'")||inp.getAttribute('onchange').includes('"'+type+'"'))inp.value='';});
+  const card=document.getElementById('doccard-'+type);
+  const status=document.getElementById('dcs-'+type);
+  const thumb=document.getElementById('docthumb-'+type);
+  if(card)card.className='doc-card';
+  if(status){status.textContent='Chưa có';status.style.background='';status.style.color='';}
+  if(thumb)thumb.style.display='none';
+  const delBtn=document.getElementById('deldoc-'+type);
+  if(delBtn)delBtn.remove();
+  toast('Đã xóa file','success');
+}
 
-function saveMyProfile(){
+async function saveMyProfile(){
   const bizName=document.getElementById('biz-name-input').value.trim();
   const bizPhone=document.getElementById('biz-phone-input').value.trim();
   const bizAddr=document.getElementById('biz-addr-input').value.trim();
   const ownerName=document.getElementById('biz-owner-input').value.trim();
   const cccdNum=document.getElementById('biz-cccd-num-input').value.trim();
-  const existing=getBizProfile(currentUser.phone)||{};
-  const updated={
-    ...existing,bizName,bizPhone,bizAddr,ownerName,cccdNum,
-    updatedAt:new Date().toISOString().slice(0,10)
-  };
-  if(_docUploads.bizlicense){updated.bizlicenseData=_docUploads.bizlicense;updated.bizlicenseMime=_docMimes.bizlicense||'';updated.bizlicense_status='';updated.bizlicense_comment='';}
-  if(_docUploads.cccd){updated.cccdData=_docUploads.cccd;updated.cccdMime=_docMimes.cccd||'';updated.cccd_status='';updated.cccd_comment='';}
-  saveBizProfile(currentUser.phone,updated);
-  const level=getBizCompleteness(updated);
-  document.getElementById('profile-status-badge').innerHTML=bizCompletenessBadge(level);
-  // Render alerts for rejected docs
-  const alertsWrap=document.getElementById('profile-alerts-wrap');
-  if(alertsWrap){
-    let alerts='';
-    const myUsers=getUsers();const myU=myUsers.find(u=>u.phone===currentUser.phone);
-    if(myU?.blocked){alerts+=`<div class="blocked-banner">🚫 Tài khoản bị chặn — Liên hệ Công An Phường để được mở chặn</div>`;}
-    if(p.bizlicense_status==='rejected'){alerts+=`<div class="rejected-banner"><span>⚠️</span><div><b>Giấy phép kinh doanh bị từ chối.</b>${p.bizlicense_comment?` Lý do: <i>${p.bizlicense_comment}</i>`:''} Vui lòng tải lại ảnh/PDF mới.</div></div>`;}
-    if(p.cccd_status==='rejected'){alerts+=`<div class="rejected-banner"><span>⚠️</span><div><b>CCCD chủ hộ bị từ chối.</b>${p.cccd_comment?` Lý do: <i>${p.cccd_comment}</i>`:''} Vui lòng tải lại ảnh/PDF mới.</div></div>`;}
-    alertsWrap.innerHTML=alerts;
-  }
-  toast('Đã lưu hồ sơ hộ kinh doanh','success');
-  _docUploads={bizlicense:null,cccd:null};
-  _docMimes={bizlicense:null,cccd:null};
-  updateDeclareBanners();
+  if(!bizName){toast('Vui lòng nhập tên hộ kinh doanh','error');return;}
+  showLoading('Đang lưu hồ sơ...');
+  try{
+    const existing=getBizProfile(currentUser.phone)||{};
+    const updated={
+      ...existing,bizName,bizPhone,bizAddr,ownerName,cccdNum,
+      updatedAt:new Date().toISOString().slice(0,10)
+    };
+    if(_docUploads.bizlicense){updated.bizlicenseData=_docUploads.bizlicense;updated.bizlicenseMime=_docMimes.bizlicense||'';updated.bizlicense_status='';updated.bizlicense_comment='';}
+    if(_docUploads.cccd){updated.cccdData=_docUploads.cccd;updated.cccdMime=_docMimes.cccd||'';updated.cccd_status='';updated.cccd_comment='';}
+    saveBizProfile(currentUser.phone,updated);
+    const level=getBizCompleteness(updated);
+    const badge=document.getElementById('profile-status-badge');
+    if(badge)badge.innerHTML=bizCompletenessBadge(level);
+    const alertsWrap=document.getElementById('profile-alerts-wrap');
+    if(alertsWrap){
+      let alerts='';
+      const myU=getUsers().find(u=>u.phone===currentUser.phone);
+      if(myU?.blocked){alerts+='<div class="blocked-banner">🚫 Tài khoản bị chặn — Liên hệ Công An Phường để được mở chặn</div>';}
+      if(updated.bizlicense_status==='rejected'){alerts+='<div class="rejected-banner"><span>⚠️</span><div><b>Giấy phép kinh doanh bị từ chối.</b>'+(updated.bizlicense_comment?' Lý do: <i>'+updated.bizlicense_comment+'</i>':'')+' Vui lòng tải lại.</div></div>';}
+      if(updated.cccd_status==='rejected'){alerts+='<div class="rejected-banner"><span>⚠️</span><div><b>CCCD chủ hộ bị từ chối.</b>'+(updated.cccd_comment?' Lý do: <i>'+updated.cccd_comment+'</i>':'')+' Vui lòng tải lại.</div></div>';}
+      alertsWrap.innerHTML=alerts;
+    }
+    toast('✅ Đã lưu hồ sơ hộ kinh doanh thành công','success');
+    _docUploads={bizlicense:null,cccd:null};
+    _docMimes={bizlicense:null,cccd:null};
+    updateDeclareBanners();
+  }catch(e){
+    toast('❌ Lỗi khi lưu: '+(e.message||String(e)),'error');
+  }finally{hideLoading();}
 }
 
 // EXPORT BIZ
