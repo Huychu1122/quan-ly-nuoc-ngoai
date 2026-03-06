@@ -869,8 +869,56 @@ input,select,textarea{font-size:16px!important;} /* Prevent iOS zoom on focus */
   </div>
 </div>
 
+      <!-- IN PHIẾU XÁC NHẬN -->
+      <div class="section" id="sec-print-section">
+        <div class="content">
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title">🖨️ In phiếu xác nhận tạm trú</div>
+            </div>
+            <div style="padding:0 0 16px">
+              <!-- Tabs -->
+              <div style="display:flex;gap:10px;margin-bottom:20px;border-bottom:2px solid var(--gray-200);padding-bottom:12px">
+                <button id="ptab-single" class="btn-sm btn-navy" onclick="showPrintTab('single')" style="padding:10px 20px">👤 In phiếu từng người</button>
+                <button id="ptab-list" class="btn-sm btn-outline" onclick="showPrintTab('list')" style="padding:10px 20px">📋 In danh sách</button>
+              </div>
+
+              <!-- Tab: từng người -->
+              <div id="print-single-wrap">
+                <div style="margin-bottom:12px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+                  <input type="text" id="print-search" placeholder="🔍 Tìm tên hoặc số hộ chiếu..." oninput="renderPrintSearch()" style="flex:1;min-width:200px;padding:10px 14px;border:2px solid var(--gray-200);border-radius:8px;font-size:14px;font-family:inherit;outline:none">
+                </div>
+                <div id="print-search-results"></div>
+              </div>
+
+              <!-- Tab: danh sách -->
+              <div id="print-list-wrap" style="display:none">
+                <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;align-items:flex-end">
+                  <div style="flex:1;min-width:180px">
+                    <label style="font-size:12px;color:var(--gray-600);font-weight:600;display:block;margin-bottom:6px">Hộ kinh doanh</label>
+                    <select id="print-biz-select" onchange="renderPrintList()" style="width:100%;padding:10px 14px;border:2px solid var(--gray-200);border-radius:8px;font-size:13px;font-family:inherit">
+                      <option value="">-- Tất cả --</option>
+                    </select>
+                  </div>
+                  <div style="flex:1;min-width:150px">
+                    <label style="font-size:12px;color:var(--gray-600);font-weight:600;display:block;margin-bottom:6px">Lọc trạng thái</label>
+                    <select id="print-status-filter" onchange="renderPrintList()" style="width:100%;padding:10px 14px;border:2px solid var(--gray-200);border-radius:8px;font-size:13px;font-family:inherit">
+                      <option value="active">Đang tạm trú (đã duyệt)</option>
+                      <option value="all">Tất cả</option>
+                      <option value="pending">Chờ duyệt</option>
+                    </select>
+                  </div>
+                  <button class="btn-sm btn-navy" onclick="printGuestList()" style="padding:10px 20px;white-space:nowrap">🖨️ In danh sách</button>
+                </div>
+                <div id="print-list-table" style="overflow-x:auto"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
 <!-- DETAIL MODAL -->
-<div class="modal-overlay" id="detailModal">
+<div class="modal-overlay" id="detailModal" style="z-index:20000">
   <div class="modal">
     <div class="modal-header"><h3>📋 Thông tin chi tiết</h3><button class="btn-close" onclick="closeModal('detailModal')">✕</button></div>
     <div class="modal-body" id="detailModalBody"></div>
@@ -909,7 +957,7 @@ input,select,textarea{font-size:16px!important;} /* Prevent iOS zoom on focus */
 
 
 <!-- BIZ DETAIL MODAL -->
-<div class="modal-overlay" id="bizDetailModal">
+<div class="modal-overlay" id="bizDetailModal" style="z-index:20000">
   <div class="modal" style="max-width:680px">
     <div class="modal-header"><h3>🏪 Thông tin hộ kinh doanh</h3><button class="btn-close" onclick="closeModal('bizDetailModal')">✕</button></div>
     <div class="modal-body" id="bizDetailBody"></div>
@@ -933,7 +981,7 @@ input,select,textarea{font-size:16px!important;} /* Prevent iOS zoom on focus */
 </div>
 
 <!-- CONFIRM DIALOG -->
-<div class="modal-overlay" id="confirmModal">
+<div class="modal-overlay" id="confirmModal" style="z-index:20001">
   <div class="modal confirm-dialog">
     <div class="modal-body"><div class="confirm-icon" id="confirmIcon">❓</div><h4 id="confirmTitle">Xác nhận</h4><p id="confirmMsg">Bạn có chắc không?</p></div>
     <div class="modal-footer"><button class="btn-sm btn-outline" onclick="closeModal('confirmModal')">Hủy</button><button class="btn-sm btn-red" id="confirmOkBtn">Xác nhận</button></div>
@@ -2753,7 +2801,7 @@ function renderPrintSection(){
 function renderPrintList(){
   const phone=document.getElementById('print-biz-select')?.value||'';
   const statusFilter=document.getElementById('print-status-filter')?.value||'active';
-  const wrap=document.getElementById('print-list-wrap');
+  const wrap=document.getElementById('print-list-table');
   if(!wrap)return;
   let decls=getDeclarations();
   if(phone)decls=decls.filter(d=>d.declaredBy===phone);
